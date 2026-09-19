@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
+	"net"
 	"os"
 	"time"
 
@@ -25,9 +27,8 @@ func main() {
 	_ = godotenv.Load()
 
 	port := getEnv("PORT", "8080")
-	mongoURI := getEnv("MONGO_URI", "mongodb://localhost:27017")
+	mongoURI := getEnv("MONGO_URI", "mongodb+srv://kavi123:kaviarasan@kavi.p55gtuz.mongodb.net/?appName=Kavi")
 	dbName := getEnv("MONGO_DB", "polling_app")
-	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	jwtSecret := getEnv("JWT_SECRET", "change-this-secret")
 	frontendURL := getEnv("FRONTEND_URL", "http://localhost:5173")
 
@@ -42,10 +43,34 @@ func main() {
 		log.Fatal("mongo ping:", err)
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		log.Fatal("redis ping:", err)
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		log.Println("WARNING: REDIS_URL environment variable is empty. Using hardcoded Upstash connection string.")
+		redisURL = "rediss://default:gQAAAAAABFecAAIgcDFkNzk1YTUyODNhNTI0Zjk3ODg5ZjAxNWNlZWEzYmRmNA@pleasing-martin-284572.upstash.io:6379"
 	}
+
+	redisOptions, err := redis.ParseURL(redisURL)
+	if err != nil {
+		log.Fatalf("invalid REDIS_URL format: %v", err)
+	}
+
+	host, _, splitErr := net.SplitHostPort(redisOptions.Addr)
+	if splitErr != nil {
+		host = redisOptions.Addr
+	}
+
+	redisOptions.TLSConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: host,
+	}
+
+	log.Printf("Connecting to Redis Host: %s | TLS ServerName: %s", redisOptions.Addr, redisOptions.TLSConfig.ServerName)
+
+	rdb := redis.NewClient(redisOptions)
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatalf("redis ping failed: %v", err)
+	}
+	log.Println("Redis connected successfully!")
 
 	hub := NewHub(rdb)
 	app := &App{
